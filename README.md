@@ -71,9 +71,41 @@ Run the interactive script:
 ./idm_external_proxy_manager.sh
 ```
 
+### Execution Mode Selection
+
+When you first run the script, you'll be prompted to select an execution mode:
+
+**1. Show curl commands (display only)**
+- Displays the curl commands that would be executed
+- Does not make any actual API calls or changes
+- Useful for:
+  - Learning what the script does
+  - Reviewing commands before execution
+  - Copying commands to run manually
+  - Understanding the API interactions
+
+**2. Run curl commands (execute)**
+- Actually executes the API calls
+- Makes real changes to your AIC instances
+- Use this mode to perform the actual configuration
+
+You can change the execution mode at any time by selecting **Option 6: Change Execution Mode** from the main menu.
+
+The current mode is displayed at the top of the menu:
+- `[MODE: SHOW COMMANDS]` - Display only mode
+- `[MODE: RUN COMMANDS]` - Execute mode
+
 ### Quick Start - Complete Setup
 
 For a complete end-to-end setup, follow this workflow:
+
+**Initial Setup:**
+1. Run the script: `./idm_external_proxy_manager.sh`
+2. Select execution mode:
+   - Start with **"Show curl commands"** to review what will happen
+   - Switch to **"Run curl commands"** when ready to execute
+
+**Configuration Workflow:**
 
 1. **Option 1: Configure AIC2 (Target)**
    - Run this first to configure the target instance
@@ -142,7 +174,12 @@ This workflow automates the entire setup process with proper validation and erro
    - All deletions require confirmation
    - Automatically obtains necessary access tokens
 
-6. **Exit**
+6. **Change Execution Mode**
+   - Switch between "Show curl commands" and "Run curl commands" modes
+   - Allows you to preview commands before executing them
+   - Or switch to execute mode to perform actual changes
+
+7. **Exit**
    - Exit the script
 
 ## How It Works
