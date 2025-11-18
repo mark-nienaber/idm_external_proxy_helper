@@ -180,7 +180,8 @@ execute_curl() {
         local mock_response='{"_id":"mock","enabled":true}'
 
         # Detect endpoint type from URL and return appropriate mock
-        local url="${args[-1]}"  # Last argument is usually the URL
+        # Get last element of array (bash 3.2 compatible)
+        local url="${args[${#args[@]}-1]}"
 
         if [[ "$url" == *"/oauth2/access_token"* ]] || [[ "$url" == *"/am/oauth2/"* ]]; then
             # OAuth token endpoint - return token response
