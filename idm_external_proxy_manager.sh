@@ -866,8 +866,8 @@ EOF
         return 1
     fi
 
-    # Check if static user mapping already exists
-    local mapping_exists=$(echo "${auth_config}" | jq -e --arg subject "${EXTERNAL_IDM_CLIENT_ID}" '.staticUserMapping[]? | select(.subject == $subject)')
+    # Check if static user mapping already exists (check inside rsFilter)
+    local mapping_exists=$(echo "${auth_config}" | jq -e --arg subject "${EXTERNAL_IDM_CLIENT_ID}" '.rsFilter.staticUserMapping[]? | select(.subject == $subject)')
 
     if [ -n "${mapping_exists}" ]; then
         print_warning "Static user mapping for '${EXTERNAL_IDM_CLIENT_ID}' already exists"
@@ -894,10 +894,10 @@ EOF
             print_info "Adding static user mapping for '${EXTERNAL_IDM_CLIENT_ID}'..."
         fi
 
-        # Add new static user mapping
+        # Add new static user mapping (inside rsFilter.staticUserMapping)
         local updated_config=$(echo "${auth_config}" | jq \
             --arg subject "${EXTERNAL_IDM_CLIENT_ID}" \
-            '.staticUserMapping += [{
+            '.rsFilter.staticUserMapping += [{
                 "subject": $subject,
                 "localUser": "internal/user/openidm-admin",
                 "roles": [
@@ -1246,8 +1246,8 @@ delete_static_user_mapping() {
         --header "Accept-API-Version: resource=1.0" \
         "https://${AIC2_TENANT}.forgeblocks.com/openidm/config/authentication")
 
-    # Remove the static user mapping
-    local updated_auth=$(echo "${auth_config}" | jq --arg subject "${EXTERNAL_IDM_CLIENT_ID}" 'del(.staticUserMapping[] | select(.subject == $subject))')
+    # Remove the static user mapping (from inside rsFilter.staticUserMapping)
+    local updated_auth=$(echo "${auth_config}" | jq --arg subject "${EXTERNAL_IDM_CLIENT_ID}" 'del(.rsFilter.staticUserMapping[] | select(.subject == $subject))')
 
     if [ "$EXEC_MODE" == "show" ]; then
         echo "" >&2
