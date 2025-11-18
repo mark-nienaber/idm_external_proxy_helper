@@ -133,8 +133,25 @@ execute_curl() {
                 local next_arg="${args[$((i + 1))]}"
                 # If next arg doesn't start with -, it's the value for this flag
                 if [[ ! "$next_arg" =~ ^- ]]; then
-                    # Quote the value if it contains spaces
-                    if [[ "$next_arg" =~ [[:space:]] ]] || [[ "$next_arg" == *$'\n'* ]]; then
+                    # Special handling for --data flag with JSON
+                    if [[ "$arg" == "--data" ]] && [[ "$next_arg" =~ ^\{ ]]; then
+                        # Pretty-print JSON data using jq if it's valid JSON
+                        local formatted_json=$(echo "$next_arg" | jq -c '.' 2>/dev/null)
+                        if [ $? -eq 0 ]; then
+                            # Successfully validated JSON - display as single-quoted string
+                            # Escape single quotes in the JSON for proper shell quoting
+                            local escaped_json=$(echo "$formatted_json" | sed "s/'/'\\\\''/g")
+                            output="$output \\\\\n  $arg '$escaped_json'"
+                        else
+                            # Not valid JSON or jq failed, display as-is with proper quoting
+                            if [[ "$next_arg" =~ [[:space:]] ]] || [[ "$next_arg" == *$'\n'* ]]; then
+                                output="$output \\\\\n  $arg \"$next_arg\""
+                            else
+                                output="$output \\\\\n  $arg $next_arg"
+                            fi
+                        fi
+                    # Quote the value if it contains spaces or newlines
+                    elif [[ "$next_arg" =~ [[:space:]] ]] || [[ "$next_arg" == *$'\n'* ]]; then
                         output="$output \\\\\n  $arg \"$next_arg\""
                     else
                         output="$output \\\\\n  $arg $next_arg"
@@ -158,13 +175,39 @@ execute_curl() {
         echo "================================================================================" >&2
         echo "" >&2
 
-        # Return a realistic mock response in show mode so the script can continue
-        # If -w flag is used for HTTP code, append it on a new line
+        # Return context-appropriate mock response based on the API endpoint
+        # This allows the script to continue in show mode
+        local mock_response='{"_id":"mock","enabled":true}'
+
+        # Detect endpoint type from URL and return appropriate mock
+        local url="${args[-1]}"  # Last argument is usually the URL
+
+        if [[ "$url" == *"/oauth2/access_token"* ]] || [[ "$url" == *"/am/oauth2/"* ]]; then
+            # OAuth token endpoint - return token response
+            mock_response='{"access_token":"MOCK_TOKEN_SHOW_MODE","token_type":"Bearer","expires_in":3600,"scope":"fr:idm:*"}'
+        elif [[ "$url" == *"/config/authentication"* ]]; then
+            # Authentication config endpoint - return realistic auth config structure
+            mock_response='{"serverAuthContext":{"authModules":[]},"clientAuthContext":{"authModules":[]},"staticUserMapping":[]}'
+        elif [[ "$url" == *"/config/sync"* ]]; then
+            # Sync config endpoint - return sync structure
+            mock_response='{"mappings":[]}'
+        elif [[ "$url" == *"/managed/"*"_user"* ]] || [[ "$url" == *"/external/idm/"* ]]; then
+            # User query endpoint - return empty result set
+            mock_response='{"result":[],"resultCount":0,"pagedResultsCookie":null,"totalPagedResultsPolicy":"NONE","totalPagedResults":-1,"remainingPagedResults":-1}'
+        elif [[ "$url" == *"/realm-config/agents/OAuth2Client/"* ]]; then
+            # OAuth client config - return client structure
+            mock_response='{"_id":"'"${EXTERNAL_IDM_CLIENT_ID:-mock-client}"'","coreOAuth2ClientConfig":{"clientType":"Confidential","scopes":["fr:idm:*"]}}'
+        elif [[ "$url" == *"/config/external.idm-"* ]]; then
+            # External IDM config - return proxy structure
+            mock_response='{"enabled":true,"authType":"bearer","instanceUrl":"https://mock.forgeblocks.com/openidm/"}'
+        fi
+
+        # Return mock response with HTTP code if -w flag was used
         if [ "$has_write_out" = true ]; then
-            echo '{"access_token":"MOCK_TOKEN_SHOW_MODE","token_type":"Bearer","expires_in":3600,"result":[],"_id":"mock","enabled":true}'
+            echo "$mock_response"
             echo "200"
         else
-            echo '{"access_token":"MOCK_TOKEN_SHOW_MODE","token_type":"Bearer","expires_in":3600,"result":[],"_id":"mock","enabled":true}'
+            echo "$mock_response"
         fi
     else
         # Execute the curl command in run mode
