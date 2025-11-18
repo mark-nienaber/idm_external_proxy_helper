@@ -4,11 +4,11 @@ Script to manage IDM external proxy configurations for AIC (Advanced Identity Cl
 
 ## Overview
 
-This script is an implementation of the **Data REST Proxy** feature documented in Ping Identity's official documentation:
+This script is an implementation of the **IDM External Proxy** feature documented in Ping Identity's official documentation:
 
-**[Data REST Proxy - Ping Identity Documentation](https://docs.pingidentity.com/pingoneaic/latest/idm-objects/data-rest-proxy.html)**
+**[IDM External Proxy - Ping Identity Documentation](https://docs.pingidentity.com/pingoneaic/latest/idm-objects/data-rest-proxy.html)**
 
-The Data REST Proxy allows you to configure an external REST endpoint that IDM can use to access data from another IDM instance. This is particularly useful for:
+The IDM External Proxy allows you to configure an external REST endpoint that IDM can use to access data from another IDM instance. This is particularly useful for:
 - Cross-tenant data migration in AIC
 - Querying users from one AIC instance while managing them in another
 - Setting up synchronization mappings between separate AIC environments
