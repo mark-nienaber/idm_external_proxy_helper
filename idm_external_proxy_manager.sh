@@ -1,13 +1,50 @@
 #!/bin/bash
 
-# AIC IDM Proxy Manager
-# Script to manage IDM proxy configurations for AIC data migration
-# Based on service_accounts.sh by Darinder S Shokar - ForgeRock Professional Services
-# Requires "OpenSSL", "jq" and "jose" tools
+################################################################################
+# IDM External Proxy Manager
+#
+# Author: Mark Nienaber
+#
+# Description:
+#   Script to manage IDM external proxy configurations for AIC (Advanced
+#   Identity Cloud) data migration. Automates the setup of external IDM
+#   connections between two AIC instances for data migration purposes.
+#
+# License:
+#   This script is provided FOR TESTING AND INFORMATIONAL USE ONLY.
+#
+#   This software is provided "AS IS", WITHOUT WARRANTY OF ANY KIND, express or
+#   implied, including but not limited to the warranties of merchantability,
+#   fitness for a particular purpose and noninfringement. In no event shall the
+#   author or copyright holders be liable for any claim, damages or other
+#   liability, whether in an action of contract, tort or otherwise, arising
+#   from, out of or in connection with the software or the use or other
+#   dealings in the software.
+#
+#   USE AT YOUR OWN RISK. This script makes changes to your AIC instances.
+#   Always test in a non-production environment first.
+#
+# Dependencies:
+#   - OpenSSL: For cryptographic operations and random value generation
+#   - jq: Command-line JSON processor
+#   - jose: JavaScript Object Signing and Encryption tools
+#
+# Credits:
+#   Based on service_accounts.sh by Darinder S Shokar - ForgeRock Professional Services
+#
+################################################################################
 
-set -e
+set -e  # Exit immediately if a command exits with a non-zero status
 
-# Load environment variables
+################################################################################
+# CONFIGURATION AND GLOBAL VARIABLES
+################################################################################
+
+# Load environment variables from .env file
+# Required variables: AIC1_TENANT, AIC1_SERVICE_ACCOUNT_ID, AIC1_JWK_PATH,
+#                     AIC2_TENANT, AIC2_SERVICE_ACCOUNT_ID, AIC2_JWK_PATH,
+#                     EXTERNAL_IDM_CLIENT_ID, EXTERNAL_IDM_CLIENT_SECRET,
+#                     EXTERNAL_IDM_REALM, EXTERNAL_IDM_CONFIG_NAME
 if [ -f .env ]; then
     source .env
 else
@@ -15,39 +52,57 @@ else
     exit 1
 fi
 
-# Colors for output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m' # No Color
+# ANSI color codes for terminal output formatting
+RED='\033[0;31m'      # Error messages
+GREEN='\033[0;32m'    # Success messages
+YELLOW='\033[1;33m'   # Warning messages
+BLUE='\033[0;34m'     # Info messages
+NC='\033[0m'          # No Color - reset to default
 
-# Global variables for access tokens
-ACCESS_TOKEN_AIC1=""
-ACCESS_TOKEN_AIC2=""
-OAUTH_CLIENT_ACCESS_TOKEN=""
+# Global variables to store access tokens for API calls
+# These are populated by get_access_token() and get_oauth_client_token()
+ACCESS_TOKEN_AIC1=""              # Service account token for AIC1 (source instance)
+ACCESS_TOKEN_AIC2=""              # Service account token for AIC2 (target instance)
+OAUTH_CLIENT_ACCESS_TOKEN=""     # OAuth client credentials token
 
-# Execution mode: "show" or "run"
+# Execution mode: Controls whether commands are displayed or executed
+# "show" = Display curl commands without executing (safe preview mode)
+# "run"  = Execute curl commands (makes actual changes to AIC instances)
 EXEC_MODE="run"
 
-# Function to print colored output
+################################################################################
+# UTILITY FUNCTIONS
+################################################################################
+
+# Print success message in green with checkmark
+# Usage: print_success "Operation completed successfully"
 print_success() {
     echo -e "${GREEN}✓ $1${NC}"
 }
 
+# Print error message in red with X mark
+# Usage: print_error "Operation failed"
 print_error() {
     echo -e "${RED}✗ $1${NC}"
 }
 
+# Print informational message in blue with info symbol
+# Usage: print_info "Processing request..."
 print_info() {
     echo -e "${BLUE}ℹ $1${NC}"
 }
 
+# Print warning message in yellow with warning symbol
+# Usage: print_warning "This action cannot be undone"
 print_warning() {
     echo -e "${YELLOW}⚠ $1${NC}"
 }
 
-# Function to execute or display curl commands
+# Execute or display curl commands based on EXEC_MODE
+# In "show" mode: Displays formatted curl command to stderr (for user review)
+# In "run" mode: Executes the actual curl command
+# Returns mock JSON in "show" mode to allow script to continue
+# Usage: execute_curl [curl arguments...]
 execute_curl() {
     if [ "$EXEC_MODE" == "show" ]; then
         # Display to stderr so it doesn't interfere with command substitution
@@ -117,7 +172,12 @@ execute_curl() {
     fi
 }
 
-# Check if openssl is installed
+################################################################################
+# DEPENDENCY CHECKING FUNCTIONS
+################################################################################
+
+# Check if OpenSSL is installed
+# OpenSSL is required for generating random values and cryptographic operations
 check_openssl() {
     hash openssl &> /dev/null
     if [ $? -eq 1 ]; then
@@ -127,6 +187,8 @@ check_openssl() {
 }
 
 # Check if jq is installed
+# jq is required for parsing and manipulating JSON responses from API calls
+# Install: brew install jq (macOS) or apt-get install jq (Linux)
 check_jq() {
     hash jq &> /dev/null
     if [ $? -eq 1 ]; then
@@ -136,6 +198,8 @@ check_jq() {
 }
 
 # Check if jose is installed
+# jose is required for JWT signing operations (service account authentication)
+# Install: brew install jose (macOS) or apt-get install jose (Linux)
 check_jose() {
     hash jose &> /dev/null
     if [ $? -eq 1 ]; then
@@ -144,39 +208,71 @@ check_jose() {
     fi
 }
 
-# Run all dependency checks
+# Run all dependency checks at startup
+# Exits script if any required tool is missing
 check_dependencies() {
     check_openssl
     check_jq
     check_jose
 }
 
-# Function to get service account access token
+################################################################################
+# AUTHENTICATION FUNCTIONS
+################################################################################
+
+# Get service account access token using JWT Bearer authentication flow
+# Implements OAuth 2.0 JWT Bearer Grant (RFC 7523) for service account authentication
+#
+# Parameters:
+#   $1 - tenant: AIC tenant name (e.g., "openam-example")
+#   $2 - service_account_id: UUID of the service account
+#   $3 - jwk_path: Path to the private key JWK file
+#   $4 - instance_name: Name for temp files (e.g., "aic1" or "aic2")
+#   $5 - scope: OAuth scope to request (default: "fr:idm:*")
+#
+# Returns: Access token (via echo), or empty string on failure
+#
+# How it works:
+#   1. Creates a JWT with service account claims (iss, sub, aud, exp, jti)
+#   2. Signs the JWT with the service account's private key (RS256)
+#   3. Exchanges signed JWT for access token at OAuth2 endpoint
+#   4. Cleans up temporary files
 get_access_token() {
     local tenant=$1
     local service_account_id=$2
     local jwk_path=$3
     local instance_name=$4
-    local scope=${5:-"fr:idm:*"}  # Default to fr:idm:* if not specified
+    local scope=${5:-"fr:idm:*"}  # Default to fr:idm:* scope if not specified
 
     print_info "Getting access token for service account: $service_account_id"
     print_info "Tenant: https://${tenant}.forgeblocks.com"
     print_info "Scope: ${scope}"
 
-    # Check if JWK file exists
+    # Verify the private key file exists before proceeding
     if [ ! -f "${jwk_path}" ]; then
         print_error "JWK file not found: ${jwk_path}"
         return 1
     fi
 
-    # Set up OAuth2 endpoint
+    # OAuth2 token endpoint for the AIC instance
     local aud="https://${tenant}.forgeblocks.com:443/am/oauth2/access_token"
+
+    # JWT expiration time (current time + 180 seconds)
     local exp=$(($(date -u +%s) + 180))
+
+    # Unique JWT identifier to prevent replay attacks
     local jti=$(openssl rand -base64 16)
+
+    # Temporary files for JWT creation (will be cleaned up after use)
     local temp_jwt="./temp_payload_${instance_name}.json"
     local temp_signed_jwt="./temp_jwt_${instance_name}.txt"
 
-    # Create JWT payload
+    # Create JWT payload with required claims
+    # iss (issuer): Service account ID
+    # sub (subject): Service account ID
+    # aud (audience): OAuth2 token endpoint
+    # exp (expiration): Unix timestamp when JWT expires
+    # jti (JWT ID): Unique identifier for this JWT
     echo -n "{
     \"iss\":\"${service_account_id}\",
     \"sub\":\"${service_account_id}\",
@@ -185,9 +281,11 @@ get_access_token() {
     \"jti\":\"${jti}\"
     }" > ${temp_jwt}
 
+    # Sign the JWT using the service account's private key with RS256 algorithm
     print_info "Signing JWT with private key from ${jwk_path}"
     jose jws sig -I ${temp_jwt} -k ${jwk_path} -s '{"alg":"RS256"}' -c -o ${temp_signed_jwt}
 
+    # Exchange the signed JWT for an access token
     print_info "Generating access token from signed JWT"
     local access_token_output=$(execute_curl -s \
         --request POST ${aud} \
@@ -221,11 +319,22 @@ get_access_token() {
         return 1
     fi
 
-    # Clean up temp files
+    # Clean up temporary files
     rm -f ${temp_jwt} ${temp_signed_jwt}
 }
 
-# Function to get OAuth client access token using client credentials flow
+# Get OAuth client access token using client credentials flow
+# Implements OAuth 2.0 Client Credentials Grant (RFC 6749 Section 4.4)
+#
+# Parameters:
+#   $1 - tenant: AIC tenant name
+#   $2 - client_id: OAuth client ID (e.g., "idmprovisioning")
+#   $3 - client_secret: OAuth client secret
+#   $4 - realm: OAuth realm (e.g., "alpha" or "bravo")
+#
+# Returns: Sets OAUTH_CLIENT_ACCESS_TOKEN global variable
+#
+# This flow is used to authenticate the external IDM proxy to the target instance
 get_oauth_client_token() {
     local tenant=$1
     local client_id=$2
@@ -237,12 +346,13 @@ get_oauth_client_token() {
     print_info "Realm: ${realm}"
     print_info "Tenant: https://${tenant}.forgeblocks.com"
 
-    # Set up OAuth2 token endpoint
+    # OAuth2 token endpoint for the specified realm
     local token_endpoint="https://${tenant}.forgeblocks.com/am/oauth2/realms/${realm}/access_token"
 
     print_info "Token endpoint: ${token_endpoint}"
 
     # Request access token using client credentials flow
+    # This is a simpler flow than JWT Bearer - just sends client ID and secret
     local access_token_output=$(execute_curl -s \
         --request POST "${token_endpoint}" \
         --data "grant_type=client_credentials" \
@@ -567,7 +677,25 @@ EOF
     fi
 }
 
-# Function to configure AIC2 (Target)
+################################################################################
+# AIC CONFIGURATION FUNCTIONS
+################################################################################
+
+# Configure AIC2 (Target Instance)
+# Sets up the target AIC instance to receive proxy connections from AIC1
+#
+# What this function does:
+#   1. Obtains service account token for AIC2 (with fr:am:* and fr:idm:* scopes)
+#   2. Creates OAuth client for external IDM authentication (if not exists)
+#   3. Configures static user mapping to grant OAuth client admin permissions
+#
+# The OAuth client created here will be used by AIC1's external IDM proxy
+# to authenticate to AIC2 when querying data.
+#
+# Prerequisites:
+#   - AIC2 service account with appropriate permissions
+#   - Service account private key in keys/ directory
+#   - .env file configured with AIC2 details
 configure_aic2() {
     echo ""
     echo "========================================="
@@ -756,7 +884,27 @@ EOF
     fi
 }
 
-# Function to configure AIC1 (Source) - Proxy only, no sync mapping
+################################################################################
+
+# Configure AIC1 (Source Instance) - External IDM Proxy Configuration
+# Sets up AIC1 to connect to AIC2 through an external IDM proxy
+#
+# What this function does:
+#   1. Obtains service account token for AIC1
+#   2. Creates external IDM proxy configuration (if not exists)
+#   3. Configures OAuth bearer authentication to AIC2
+#
+# The external IDM proxy allows AIC1 to query data from AIC2 as if it were
+# local. API calls to /openidm/external/idm/{config-name}/ are proxied to AIC2.
+#
+# Important paths:
+#   - Configuration storage: /openidm/config/external.idm-{config-name}
+#   - Runtime access: /openidm/external/idm/{config-name}/
+#
+# Prerequisites:
+#   - AIC2 must be configured first (run configure_aic2())
+#   - OAuth client must exist on AIC2
+#   - Static user mapping must be configured on AIC2
 configure_aic1() {
     echo ""
     echo "========================================="
@@ -1118,7 +1266,23 @@ delete_all_configurations() {
     print_success "All delete operations completed!"
 }
 
-# Function to handle deletions
+################################################################################
+# DELETION FUNCTIONS
+################################################################################
+
+# Delete Configurations Menu
+# Provides submenu for deleting various AIC configurations
+#
+# Options:
+#   1. Delete External IDM Proxy Config (AIC1) - Removes proxy connection
+#   2. Delete Sync Mapping (AIC1) - Removes user sync configuration
+#   3. Delete OAuth Client (AIC2) - Removes OAuth client from target
+#   4. Delete Static User Mapping (AIC2) - Removes authentication mapping
+#   5. Delete ALL Configurations - Runs deletions in proper order (2,1,4,3)
+#   6. Back to Main Menu - Returns without deleting
+#
+# All deletions require "yes" confirmation and automatically obtain
+# necessary access tokens before executing.
 delete_configurations() {
     echo ""
     echo "========================================="
@@ -1166,7 +1330,25 @@ delete_configurations() {
 }
 
 
-# Function to select execution mode
+################################################################################
+# MENU AND USER INTERFACE FUNCTIONS
+################################################################################
+
+# Select Execution Mode
+# Prompts user to choose between display mode and execute mode
+#
+# Modes:
+#   1. Show curl commands (display only)
+#      - Displays formatted curl commands without executing
+#      - Safe for learning and reviewing what will happen
+#      - Returns mock responses to allow script to continue
+#
+#   2. Run curl commands (execute)
+#      - Actually executes all API calls
+#      - Makes real changes to AIC instances
+#      - USE WITH CAUTION in production environments
+#
+# Sets global EXEC_MODE variable which controls execute_curl() behavior
 select_execution_mode() {
     echo ""
     echo "========================================="
@@ -1195,11 +1377,21 @@ select_execution_mode() {
     echo ""
 }
 
-# Main menu
+# Display Main Menu
+# Shows primary menu options and current execution mode
+#
+# Menu Options:
+#   1. Configure AIC2 (Target) - Setup target instance for proxy connections
+#   2. Configure AIC1 (Source) - Create external IDM proxy to AIC2
+#   3. Verify/Test Proxy - Test that proxy works correctly
+#   4. Create Sync Mapping - Setup user sync from AIC1 to AIC2
+#   5. Delete Configurations - Remove configurations (submenu)
+#   6. Change Execution Mode - Switch between show/run modes
+#   7. Exit - Quit the script
 show_menu() {
     echo ""
     echo "========================================="
-    echo "   AIC IDM Proxy Manager"
+    echo "   IDM External Proxy Manager"
     echo "========================================="
     if [ "$EXEC_MODE" == "show" ]; then
         echo -e "${YELLOW}[MODE: SHOW COMMANDS]${NC}"
@@ -1218,14 +1410,39 @@ show_menu() {
     echo -n "Select an option [1-7]: "
 }
 
-# Main loop
+################################################################################
+# MAIN PROGRAM ENTRY POINT
+################################################################################
+
+# Main Function - Program Entry Point
+# Orchestrates the interactive menu-driven workflow for configuring AIC external
+# IDM proxy connections.
+#
+# Workflow:
+#   1. Checks for required dependencies (openssl, jq, jose)
+#   2. Prompts user to select execution mode (show/run)
+#   3. Displays interactive menu in a loop
+#   4. Executes selected operations
+#   5. Waits for user confirmation before returning to menu
+#
+# The script runs in an infinite loop until user selects Exit (option 7)
+# or terminates with Ctrl+C.
+#
+# Recommended workflow for first-time setup:
+#   1. Start with "Show commands" mode to preview operations
+#   2. Configure AIC2 (Target) first
+#   3. Configure AIC1 (Source) second
+#   4. Verify/Test the proxy configuration
+#   5. Create Sync Mapping if needed
+#   6. Switch to "Run commands" mode when ready to execute
 main() {
-    # Check dependencies on startup
+    # Verify all required tools are installed before proceeding
     check_dependencies
 
-    # Select execution mode on startup
+    # Let user choose between display mode (safe preview) or execute mode
     select_execution_mode
 
+    # Main interactive loop - continues until user exits
     while true; do
         show_menu
         read -r choice
@@ -1280,5 +1497,14 @@ main() {
     done
 }
 
-# Run main function
+################################################################################
+# SCRIPT EXECUTION
+################################################################################
+
+# Start the script by calling main function
+# This is the entry point - execution begins here
 main
+
+################################################################################
+# END OF SCRIPT
+################################################################################
