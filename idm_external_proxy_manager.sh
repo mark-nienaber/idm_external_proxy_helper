@@ -338,8 +338,20 @@ get_access_token() {
         --data "assertion=$(< ${temp_signed_jwt})" \
         --data "scope=${scope}")
 
-    # Check if token request was successful
-    if echo "${access_token_output}" | jq -e '.access_token' > /dev/null 2>&1; then
+    # Check if token request was successful (skip validation in show mode)
+    if [ "$EXEC_MODE" == "show" ]; then
+        # In show mode, just set mock token and continue
+        local access_token="MOCK_TOKEN_SHOW_MODE"
+
+        # Store mock token in global variable
+        if [ "$instance_name" == "AIC1" ]; then
+            ACCESS_TOKEN_AIC1="${access_token}"
+        elif [ "$instance_name" == "AIC2" ]; then
+            ACCESS_TOKEN_AIC2="${access_token}"
+        fi
+
+        print_info "SHOW MODE: Command displayed above (not executed)"
+    elif echo "${access_token_output}" | jq -e '.access_token' > /dev/null 2>&1; then
         local access_token=$(echo ${access_token_output} | jq -r .access_token)
 
         # Store token in global variable
@@ -349,13 +361,9 @@ get_access_token() {
             ACCESS_TOKEN_AIC2="${access_token}"
         fi
 
-        if [ "$EXEC_MODE" == "show" ]; then
-            print_info "SHOW MODE: Command displayed above (not executed)"
-        else
-            print_success "Access token retrieved successfully"
-            print_info "Token (first 50 chars): ${access_token:0:50}..."
-            echo "${access_token_output}" | jq .
-        fi
+        print_success "Access token retrieved successfully"
+        print_info "Token (first 50 chars): ${access_token:0:50}..."
+        echo "${access_token_output}" | jq .
     else
         print_error "Failed to get access token"
         echo "${access_token_output}" | jq .
@@ -404,20 +412,20 @@ get_oauth_client_token() {
         --data "client_secret=${client_secret}" \
         --data "scope=fr:idm:*")
 
-    # Check if token request was successful
-    if echo "${access_token_output}" | jq -e '.access_token' > /dev/null 2>&1; then
+    # Check if token request was successful (skip validation in show mode)
+    if [ "$EXEC_MODE" == "show" ]; then
+        # In show mode, just set mock token and continue
+        OAUTH_CLIENT_ACCESS_TOKEN="MOCK_TOKEN_SHOW_MODE"
+        print_info "SHOW MODE: Command displayed above (not executed)"
+    elif echo "${access_token_output}" | jq -e '.access_token' > /dev/null 2>&1; then
         local access_token=$(echo ${access_token_output} | jq -r .access_token)
 
         # Store token in global variable
         OAUTH_CLIENT_ACCESS_TOKEN="${access_token}"
 
-        if [ "$EXEC_MODE" == "show" ]; then
-            print_info "SHOW MODE: Command displayed above (not executed)"
-        else
-            print_success "OAuth client access token retrieved successfully"
-            print_info "Token (first 50 chars): ${access_token:0:50}..."
-            echo "${access_token_output}" | jq .
-        fi
+        print_success "OAuth client access token retrieved successfully"
+        print_info "Token (first 50 chars): ${access_token:0:50}..."
+        echo "${access_token_output}" | jq .
     else
         print_error "Failed to get OAuth client access token"
         echo "${access_token_output}" | jq .
